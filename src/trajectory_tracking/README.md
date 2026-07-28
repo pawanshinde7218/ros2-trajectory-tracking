@@ -1,15 +1,31 @@
-# trajectory_tracking
+# ROS 2 Path Smoothing & Trajectory Tracking
 
-A from-scratch ROS 2 (Humble) pipeline for **waypoint collection → cubic-spline
-path smoothing → constant-velocity time parameterization → pure-pursuit-style
-trajectory tracking** on a differential-drive robot — **no Nav2 whatsoever**
-(no Planner Server, Smac/NavFn, Controller Server, DWB/RPP/MPPI, BT Navigator,
-recovery behaviors, or costmaps).
+A from-scratch ROS 2 Humble pipeline for **waypoint collection → cubic-spline path smoothing → constant-velocity time parameterization → time-indexed trajectory tracking** on a differential-drive robot.
 
-It assumes a working simulated robot already exists: URDF, Gazebo spawn,
-`ros2_control` + diff-drive controller, `/odom`, `/cmd_vel`, and TF are all
-in place. This package only implements the four algorithmic stages that turn
-a handful of clicked points into smooth, tracked motion.
+This project implements the path smoothing, trajectory generation, and trajectory tracking stages without relying on Nav2 planning or controller plugins.
+
+It assumes that a working simulated differential-drive robot already exists with:
+
+- URDF / Xacro
+- Gazebo simulation
+- `ros2_control` and a differential-drive controller
+- `/odom`
+- `/cmd_vel`
+- Working TF tree
+
+This package focuses on converting a set of user-selected 2D waypoints into a smooth trajectory and making the robot track it.
+
+---
+
+## Demo Video
+
+**Demo video:** Add the final 3–5 minute demonstration video link here.
+
+Example:
+
+```text
+https://youtu.be/YOUR_VIDEO_ID
+```
 
 ---
 
@@ -17,132 +33,340 @@ a handful of clicked points into smooth, tracked motion.
 
 | Stage | Node | Input | Output | Algorithm |
 |---|---|---|---|---|
-| 1 | `waypoint_collector.py` | `/clicked_point` (RViz "Publish Point") | `/raw_waypoints`, `/waypoint_markers` | Collect exactly N (default 7) clicks |
-| 2 | `path_smoother.py` | `/raw_waypoints` | `/smooth_path` | Parametric cubic spline over chord length |
+| 1 | `waypoint_collector.py` | `/clicked_point` | `/raw_waypoints`, `/waypoint_markers` | Collect N waypoints (default: 7) |
+| 2 | `path_smoother.py` | `/raw_waypoints` | `/smooth_path` | Parametric natural cubic spline |
 | 3 | `trajectory_generator.py` | `/smooth_path` | `/trajectory` | Constant-velocity time parameterization |
-| 4 | `trajectory_controller.py` | `/odom`, `/trajectory` | `/cmd_vel` | Time-indexed pure-pursuit-style controller |
-| — | `rviz_visualizer.py` | `/odom` | `/robot_path` | Accumulates the actual travelled path (green) |
+| 4 | `trajectory_controller.py` | `/odom`, `/trajectory` | `/cmd_vel` | Time-indexed tracking with Pure-Pursuit-style curvature |
+| 5 | `rviz_visualizer.py` | `/odom` | `/robot_path` | Actual travelled-path visualization |
 
-## 2. Architecture Diagram
+The current implementation automatically starts processing after **7 waypoints** are selected using RViz's **Publish Point** tool. The number of required waypoints is configurable.
 
-```
-                     RViz "Publish Point" tool
+---
+
+## 2. System Architecture
+
+```text
+                     RViz "Publish Point" Tool
                               │
+                              │ /clicked_point
                               ▼
-                    ┌───────────────────┐
-                    │ waypoint_collector │  -> /waypoint_markers (red spheres)
-                    └─────────┬─────────┘
-                              │ /raw_waypoints (7 pts, nav_msgs/Path)
-                              ▼
-                    ┌───────────────────┐
-                    │   path_smoother    │  cubic spline, 5 cm sampling
-                    └─────────┬─────────┘
-                              │ /smooth_path (nav_msgs/Path, blue in RViz)
-                              ▼
-                    ┌───────────────────┐
-                    │ trajectory_generator│ constant-velocity time parameterization
-                    └─────────┬─────────┘
-                              │ /trajectory (trajectory_tracking/Trajectory)
-                              ▼
-                    ┌───────────────────┐
-        /odom ────▶ │ trajectory_controller │──▶ /cmd_vel ──▶ diff-drive robot
-                    └───────────────────┘
-                              ▲
-                              │ /odom
-                    ┌───────────────────┐
-                    │  rviz_visualizer   │──▶ /robot_path (green, actual path driven)
-                    └───────────────────┘
+                    ┌─────────────────────┐
+                    │ Waypoint Collector  │
+                    └──────────┬──────────┘
+                               │
+                               ├── /waypoint_markers
+                               │      (input-point visualization)
+                               │
+                               │ /raw_waypoints
+                               ▼
+                    ┌─────────────────────┐
+                    │    Path Smoother    │
+                    │    Cubic Spline     │
+                    └──────────┬──────────┘
+                               │
+                               │ /smooth_path
+                               ▼
+                    ┌─────────────────────┐
+                    │Trajectory Generator │
+                    │ Time Parameterizer  │
+                    └──────────┬──────────┘
+                               │
+                               │ /trajectory
+                               ▼
+                    ┌─────────────────────┐
+        /odom ─────▶│Trajectory Controller│────▶ /cmd_vel
+                    └─────────────────────┘           │
+                                                     ▼
+                                          Differential-Drive Robot
+
+        /odom
+          │
+          ▼
+    ┌───────────────────┐
+    │ RViz Visualizer   │
+    └─────────┬─────────┘
+              │
+              └──▶ /robot_path
 ```
 
-## 3. ROS Graph / Topics
+---
 
-| Topic | Type | Publisher | Subscriber(s) |
+## 3. ROS 2 Interfaces
+
+### Topics
+
+| Topic | Message Type | Publisher | Subscriber(s) |
 |---|---|---|---|
 | `/clicked_point` | `geometry_msgs/PointStamped` | RViz | `waypoint_collector` |
 | `/raw_waypoints` | `nav_msgs/Path` | `waypoint_collector` | `path_smoother` |
 | `/waypoint_markers` | `visualization_msgs/MarkerArray` | `waypoint_collector` | RViz |
 | `/smooth_path` | `nav_msgs/Path` | `path_smoother` | `trajectory_generator`, RViz |
 | `/trajectory` | `trajectory_tracking/Trajectory` | `trajectory_generator` | `trajectory_controller` |
-| `/odom` | `nav_msgs/Odometry` | robot stack | `trajectory_controller`, `rviz_visualizer` |
-| `/cmd_vel` | `geometry_msgs/Twist` | `trajectory_controller` | robot stack |
+| `/odom` | `nav_msgs/Odometry` | Robot stack | `trajectory_controller`, `rviz_visualizer` |
+| `/cmd_vel` | `geometry_msgs/Twist` | `trajectory_controller` | Robot stack |
 | `/robot_path` | `nav_msgs/Path` | `rviz_visualizer` | RViz |
 
-Custom messages (`msg/`):
+### Custom Messages
 
-```
-TrajectoryPoint.msg:
-  float64 x
-  float64 y
-  float64 theta
-  float64 velocity
-  float64 time_from_start
+`TrajectoryPoint.msg`
 
-Trajectory.msg:
-  std_msgs/Header header
-  TrajectoryPoint[] points
+```text
+float64 x
+float64 y
+float64 theta
+float64 velocity
+float64 time_from_start
 ```
 
-## 4. Algorithms & Math
+`Trajectory.msg`
 
-### 4.1 Path Smoothing — Parametric Cubic Spline
-
-Given waypoints `P0..Pn`, chord length is accumulated as
-`s_0 = 0`, `s_i = s_{i-1} + ||P_i - P_{i-1}||`.
-
-Two independent natural cubic splines are fit:
-
-```
-x(s) = CubicSpline(s_i, x_i),  bc_type = "natural"  (zero curvature at ends)
-y(s) = CubicSpline(s_i, y_i)
+```text
+std_msgs/Header header
+TrajectoryPoint[] points
 ```
 
-The spline is then evaluated at `s = 0, Δs, 2Δs, ..., s_n` with `Δs = 0.05 m`
-(parameter `sample_spacing`), producing a dense `nav_msgs/Path`.
+---
 
-### 4.2 Trajectory Generation — Constant Velocity Time Parameterization
+## 4. Algorithms and Mathematical Formulation
 
-For each smoothed point `i` with cumulative distance `d_i`:
+### 4.1 Waypoint Collection
 
-```
-t_i = d_i / v_cruise           (v_cruise = 0.5 m/s by default)
-θ_i = atan2(y_{i+1} - y_i, x_{i+1} - x_i)     (heading from look-ahead point)
-```
+The user selects 2D points interactively in RViz using the **Publish Point** tool.
 
-The final point's commanded velocity is forced to `0` so the controller can
-detect the stopping condition.
+Each click publishes:
 
-### 4.3 Trajectory Tracking — Time-Indexed Pure Pursuit
-
-At each control tick (20 Hz), elapsed time `Δt = now - t_start` is used to
-find the two trajectory points bracketing `Δt` and linearly interpolate a
-reference `(x_ref, y_ref, θ_ref, v_ref)` — **the reference is chosen by time,
-never by nearest-waypoint search**, as required.
-
-Errors relative to the current pose `(x, y, θ)`:
-
-```
-Δx = x_ref - x,  Δy = y_ref - y
-distance_error = sqrt(Δx² + Δy²)
-heading_error  = normalize(atan2(Δy, Δx) - θ)      (wrapped to (-π, π])
+```text
+/clicked_point
 ```
 
-Control law (pure-pursuit curvature form, with the reference speed in place
-of a fixed lookahead distance):
+as a `geometry_msgs/PointStamped`.
 
+The waypoint collector stores the points until the configured number of waypoints is reached. The default is:
+
+```text
+num_waypoints = 7
 ```
-curvature = 2 · sin(heading_error) / max(distance_error, ε)
-v = clamp((v_ref + k_d · distance_error) · cos(heading_error), 0, v_max)
-ω = clamp(curvature · v, -ω_max, ω_max)
+
+After the seventh point is received, the collected waypoints are published automatically as a `nav_msgs/Path` on:
+
+```text
+/raw_waypoints
 ```
 
-The `cos(heading_error)` taper slows the robot (and lets `curvature` dominate)
-when it is pointed far away from the reference, avoiding overshoot on sharp
-turns. The robot stops once elapsed time has passed the trajectory's total
-duration **and** it is within `goal_position_tolerance` of the final point.
+This fixed-count trigger was selected to keep the assignment implementation simple and deterministic within the available development time.
 
-## 5. Package Layout
+---
 
+### 4.2 Path Smoothing — Parametric Natural Cubic Spline
+
+The raw waypoints are discrete and may contain abrupt direction changes. A parametric cubic spline is therefore used to generate a smooth path.
+
+For waypoints:
+
+```text
+P0, P1, ..., Pn
 ```
+
+the cumulative chord-length parameter is:
+
+```text
+s0 = 0
+
+si = s(i-1) + ||Pi - P(i-1)||
+```
+
+Two independent cubic splines are then fitted:
+
+```text
+x = x(s)
+y = y(s)
+```
+
+using:
+
+```python
+CubicSpline(..., bc_type="natural")
+```
+
+A natural cubic spline sets the **second derivative to zero at the endpoints**.
+
+Using a parametric representation avoids the limitation of expressing the path only as `y = f(x)`, which can fail when the path turns back in the X direction.
+
+The spline is sampled at approximately:
+
+```text
+0.05 m
+```
+
+intervals by default.
+
+The resulting dense path is published as:
+
+```text
+/smooth_path
+```
+
+using `nav_msgs/Path`.
+
+---
+
+### 4.3 Trajectory Generation — Constant-Velocity Time Parameterization
+
+A path describes **where** the robot should move.
+
+A trajectory additionally describes **when** the robot should reach each point.
+
+For each point on the smoothed path, cumulative distance is calculated. With a constant cruise velocity:
+
+```text
+v_cruise = 0.5 m/s
+```
+
+by default, the timestamp is calculated as:
+
+```text
+ti = di / v_cruise
+```
+
+where:
+
+- `di` = cumulative distance from the beginning of the path
+- `v_cruise` = desired reference velocity
+- `ti` = time from trajectory start
+
+The heading is calculated from consecutive path points:
+
+```text
+theta_i = atan2(y(i+1) - yi, x(i+1) - xi)
+```
+
+Each generated trajectory point contains:
+
+```text
+x
+y
+theta
+velocity
+time_from_start
+```
+
+The final trajectory point has a reference velocity of zero to support stopping at the goal.
+
+The generated trajectory is published on:
+
+```text
+/trajectory
+```
+
+---
+
+### 4.4 Trajectory Tracking — Time-Indexed Controller with Pure-Pursuit-Style Curvature
+
+The controller subscribes to:
+
+```text
+/trajectory
+/odom
+```
+
+and publishes:
+
+```text
+/cmd_vel
+```
+
+When a new trajectory is received, the controller stores it and starts a trajectory clock.
+
+At each control cycle, running at **20 Hz by default**, elapsed time is calculated:
+
+```text
+elapsed_time = current_time - trajectory_start_time
+```
+
+The controller finds the two trajectory points surrounding the current elapsed time and interpolates between them to obtain the current reference state:
+
+```text
+(x_ref, y_ref, theta_ref, v_ref)
+```
+
+This makes the controller **time-indexed** rather than selecting the nearest waypoint.
+
+For the current robot pose:
+
+```text
+(x, y, theta)
+```
+
+the positional errors are:
+
+```text
+dx = x_ref - x
+dy = y_ref - y
+
+distance_error = sqrt(dx² + dy²)
+```
+
+The direction from the robot toward the current reference point is:
+
+```text
+target_heading = atan2(dy, dx)
+```
+
+and heading error is:
+
+```text
+heading_error = normalize(target_heading - theta)
+```
+
+The controller uses a Pure-Pursuit-style curvature relation:
+
+```text
+curvature = 2 * sin(heading_error) / max(distance_error, epsilon)
+```
+
+Linear velocity combines the trajectory feed-forward velocity with distance-error feedback and a heading-dependent taper:
+
+```text
+v = (v_ref + k_distance * distance_error) * heading_taper
+```
+
+Angular velocity is then calculated from:
+
+```text
+omega = curvature * v
+```
+
+Both commands are limited by configurable maximum linear and angular velocities before being published as `geometry_msgs/Twist`.
+
+The robot stops when the trajectory duration has completed and the robot is within the configured final-position tolerance.
+
+> Note: this controller is described as a **time-indexed trajectory tracking controller using a Pure-Pursuit-style curvature law**. It is not intended to be presented as a conventional spatial-lookahead Pure Pursuit implementation.
+
+---
+
+## 5. RViz Visualization
+
+The system provides three useful visual outputs:
+
+- **Waypoint markers** — original user-selected waypoints
+- **Smoothed reference path** — generated cubic-spline path
+- **Robot path** — actual path travelled using odometry
+
+This allows the desired and actual trajectories to be compared visually during execution.
+
+Suggested visualization convention:
+
+```text
+Red markers  → selected waypoints
+Blue path    → smoothed reference path
+Green path   → actual travelled path
+```
+
+---
+
+## 6. Package Layout
+
+```text
 trajectory_tracking/
 ├── CMakeLists.txt
 ├── package.xml
@@ -166,109 +390,372 @@ trajectory_tracking/
     └── rviz_visualizer.py
 ```
 
-## 6. Build & Run
+---
+
+## 7. Prerequisites
+
+The current project was developed for a ROS 2 Humble simulation environment.
+
+Required software includes:
+
+- Ubuntu with ROS 2 Humble
+- Gazebo simulation environment
+- RViz2
+- Python 3
+- NumPy
+- SciPy
+- pytest for unit testing
+
+A working differential-drive robot simulation providing `/odom` and accepting `/cmd_vel` is required.
+
+---
+
+## 8. Build and Run
+
+Place the package inside the `src` directory of a ROS 2 workspace.
 
 ```bash
-# from the root of your ROS2 workspace, e.g. ~/ros2_ws
-cp -r trajectory_tracking src/
+cd ~/ros2_ws
+cp -r /path/to/trajectory_tracking src/
+
 colcon build --packages-select trajectory_tracking
 source install/setup.bash
 ```
 
-Terminal 1 — bring up your existing robot simulation (Gazebo + robot + TF),
-exactly as you already do today (this package does not touch that stack):
+### Terminal 1 — Start the Robot Simulation
+
+Start the existing differential-drive robot simulation:
 
 ```bash
 ros2 launch <your_robot_bringup_package> <your_sim_launch_file>
 ```
 
-Terminal 2 — start RViz2 with the provided configuration:
+The robot simulation must provide:
+
+```text
+/odom
+/cmd_vel
+TF
+```
+
+### Terminal 2 — Start RViz
 
 ```bash
 rviz2 -d install/trajectory_tracking/share/trajectory_tracking/config/trajectory_tracking.rviz
 ```
 
-Terminal 3 — start the pipeline:
+### Terminal 3 — Start the Trajectory Pipeline
 
 ```bash
 ros2 launch trajectory_tracking trajectory_tracking.launch.py
 ```
 
-In RViz, select the **Publish Point** tool and click 7 points in the map.
-After the 7th click, smoothing, trajectory generation, and tracking start
-automatically — no service call, button, or keyboard input required.
+### Select Waypoints
 
-### Useful launch arguments
+In RViz:
+
+1. Select **Publish Point**.
+2. Click seven points.
+3. After the seventh point, the pipeline starts automatically.
+4. The smooth path is generated.
+5. The trajectory is time-parameterized.
+6. The controller starts publishing velocity commands.
+7. The robot follows the generated trajectory.
+
+No keyboard input, service call, or GUI trigger is required in the current implementation.
+
+### Example Launch Parameters
 
 ```bash
 ros2 launch trajectory_tracking trajectory_tracking.launch.py \
-  num_waypoints:=7 sample_spacing:=0.05 cruise_velocity:=0.5 control_frequency:=20.0
+  num_waypoints:=7 \
+  sample_spacing:=0.05 \
+  cruise_velocity:=0.5 \
+  control_frequency:=20.0
 ```
 
-## 7. Testing
+---
 
-`test/test_utils.py` unit-tests the pure geometry/math helpers
-(angle normalization, distance, heading, cumulative arc length, quaternion
-round-trips, interpolation) independently of any ROS2 runtime:
+## 9. Results
+
+The complete pipeline was evaluated in simulation using a differential-drive robot.
+
+Seven waypoints were selected interactively in RViz. The waypoint collector passed these points to the cubic-spline path smoother, which generated a dense smooth reference path. The path was then converted into a constant-velocity, time-parameterized trajectory and tracked by the custom controller.
+
+During visualization:
+
+```text
+Red markers → Original selected waypoints
+Blue path   → Generated smooth reference path
+Green path  → Actual robot trajectory
+```
+
+After controller tuning, the actual travelled path closely followed the generated reference path, including curved sections.
+
+During initial experiments, conservative maximum linear and angular velocity limits produced noticeably larger tracking errors. Because the reference is time-indexed, insufficient velocity limits caused the robot to fall behind the moving reference and the controller commands to saturate.
+
+Increasing the velocity limits within the capabilities of the simulated differential-drive robot significantly improved tracking performance.
+
+### Trajectory Tracking Result
+
+Add the final RViz screenshot here:
+
+```markdown
+![Trajectory Tracking Result](media/screenshots/trajectory_tracking.png)
+```
+
+### Waypoint and Smoothed-Path Visualization
+
+```markdown
+![Waypoint and Smoothed Path](media/screenshots/smooth_path.png)
+```
+
+---
+
+## 10. Testing and QA
+
+The project includes unit tests for the mathematical utility functions in:
+
+```text
+test/test_utils.py
+```
+
+The tests cover utility functionality such as:
+
+- Angle normalization
+- Euclidean distance
+- Heading calculation
+- Cumulative path distance
+- Quaternion/yaw conversion
+- Point interpolation
+- Path-resampling helpers
+
+Run the tests with:
 
 ```bash
 python3 -m pytest test/test_utils.py -v
 ```
 
-Node-level integration testing (spinning up each node and checking published
-topics with `ros2 topic echo` / a `launch_testing` harness) is a natural next
-step and is called out under Future Work.
+These tests allow the core mathematical helpers to be checked independently of the ROS 2 runtime.
 
-## 8. AI Tools Used
+### Current Testing Scope
 
-This package (nodes, message definitions, launch file, RViz config, unit
-tests, and this README) was generated with AI assistance (Claude) based on
-the assignment specification, then reviewed for correctness against the
-constant-velocity time-parameterization and cubic-spline path-smoothing math
-worked through by hand.
+The current implementation combines:
 
-## 9. Extending to a Real Robot
+- Unit testing of mathematical helper functions
+- Gazebo simulation testing
+- RViz visual comparison of reference and actual paths
+- Controller parameter tuning through repeated trajectory executions
 
-- Replace the assumed `/odom` source with a fused estimate (wheel odometry +
-  IMU, or an EKF via `robot_localization`) since raw wheel odometry drifts
-  significantly over the duration of a real trajectory.
-- Add acceleration/jerk limits to the trajectory generator (trapezoidal or
-  S-curve velocity profile) — real motors cannot instantaneously reach
-  `v_cruise`.
-- Tune `distance_gain`, `max_linear_velocity`, and `max_angular_velocity` to
-  the physical robot's actual dynamics and safety limits; add a watchdog
-  that zeroes `/cmd_vel` if `/odom` goes stale.
-- Add a low-pass filter or slew-rate limiter on the published `Twist` to
-  protect gearboxes/motor drivers from step commands.
+Node-level automated integration tests are not currently implemented.
 
-## 10. Extra Credit — Obstacle Handling (Future Work)
+---
 
-Only a **safe stop** is in scope here — no replanning, no Nav2 recovery
-behaviors, no local planner:
+## 11. Design Decisions
 
-- A `LaserScan` (or `PointCloud2`) subscriber would check for obstacles
-  inside a forward safety corridor sized to the robot's footprint plus
-  current speed's stopping distance.
-- On detection, the controller publishes a zero `Twist` and latches a
-  "blocked" state until the obstacle clears, then resumes tracking from the
-  current elapsed time (not from the last waypoint, to avoid a discontinuous
-  jump).
-- True obstacle avoidance (local replanning around the obstacle) is
-  explicitly **out of scope** and left as future work.
+### Why Cubic Spline?
 
-## 11. Future Work
+Cubic splines provide a smooth path through the selected waypoints while avoiding abrupt direction changes between consecutive straight-line segments.
 
-- Unlimited waypoint collection (not fixed to 7)
-- Service-based or GUI-based trigger to start smoothing, instead of a fixed count
-- Optional Nav2 integration for global planning while keeping this custom local pipeline
-- Dynamic obstacle avoidance (beyond the safe-stop behavior above)
-- Trajectory replanning on execution deviation
-- Trapezoidal / S-curve velocity profiles instead of constant velocity
-- Model Predictive Control (MPC) tracking controller as an alternative to pure pursuit
-- Node-level integration tests using `launch_testing`
+### Why Constant Velocity?
 
-## 12. Screenshots
+The assignment focuses on time-parameterized trajectory generation. A constant-velocity profile provides a simple and clear baseline:
 
-_Add RViz screenshots/GIFs here showing: (1) the 7 red waypoint markers,
-(2) the blue smoothed spline, and (3) the green travelled path overlapping
-the blue path as the robot completes the run._
+```text
+time = distance / velocity
+```
+
+It keeps the implementation understandable while still producing a valid time-indexed trajectory.
+
+### Why a Custom Controller?
+
+The goal of the project is to demonstrate the trajectory-generation and tracking pipeline directly. Therefore, the tracking controller was implemented in the package rather than using an existing Nav2 controller plugin.
+
+### Why Seven Waypoints?
+
+The current implementation uses seven waypoints as a deterministic trigger for automatically starting path generation.
+
+This was chosen to keep waypoint collection simple within the assignment time constraint.
+
+The number is configurable, and a service or GUI-based completion trigger would be preferable for a more general system.
+
+---
+
+## 12. Extending the System to a Real Robot
+
+Several changes would be required before deploying this pipeline to physical hardware.
+
+### State Estimation
+
+Real wheel odometry accumulates drift. A more robust implementation could fuse:
+
+- Wheel odometry
+- IMU
+- Additional localization sensors
+
+using an EKF such as `robot_localization`.
+
+### Velocity and Acceleration Constraints
+
+Real motors cannot instantaneously change velocity.
+
+A physical system should therefore use:
+
+- Acceleration limits
+- Deceleration limits
+- Jerk limits
+- Trapezoidal or S-curve velocity profiles
+
+### Safety
+
+A real deployment should include:
+
+- Emergency stop
+- `/cmd_vel` watchdog
+- Stale-odometry detection
+- Motor/controller fault handling
+- Obstacle detection
+- Velocity limits based on the physical platform
+
+### Controller Tuning
+
+Parameters such as:
+
+```text
+distance gain
+maximum linear velocity
+maximum angular velocity
+goal tolerance
+```
+
+would need to be tuned for the physical robot's dimensions, wheelbase, motor response, payload, and operating surface.
+
+---
+
+## 13. Obstacle Handling — Proposed Extension
+
+Obstacle detection and avoidance are **not implemented in the current version**.
+
+A future extension could subscribe to:
+
+```text
+sensor_msgs/LaserScan
+```
+
+or:
+
+```text
+sensor_msgs/PointCloud2
+```
+
+and detect obstacles inside a forward safety region based on the robot footprint and stopping distance.
+
+A basic first stage could implement a **safe-stop behaviour**:
+
+```text
+Obstacle detected
+       ↓
+Publish zero /cmd_vel
+       ↓
+Robot stops
+```
+
+A more advanced version could include local trajectory modification or replanning around the obstacle.
+
+Nav2 integration could also be considered when global planning, costmaps, recovery behaviours, and dynamic obstacle handling are required.
+
+---
+
+## 14. Limitations
+
+The current implementation has several intentional limitations:
+
+- Waypoint execution starts after a fixed configured number of clicks.
+- Constant velocity is used instead of an acceleration-constrained velocity profile.
+- Dynamic obstacle avoidance is not implemented.
+- No online trajectory replanning is performed.
+- The controller was tuned primarily for the simulated differential-drive robot.
+- Automated node-level integration testing is not yet included.
+- Quantitative tracking metrics such as RMSE are not currently calculated.
+
+---
+
+## 15. Future Work
+
+Potential improvements include:
+
+- Unlimited waypoint collection
+- Service-based or GUI-based trajectory-start trigger
+- Trapezoidal or S-curve velocity profiles
+- Acceleration and jerk constraints
+- Quantitative trajectory tracking metrics
+- Dynamic obstacle detection
+- Local trajectory replanning
+- Nav2 integration for global planning
+- Alternative controllers such as MPC
+- Automated ROS 2 integration tests using `launch_testing`
+- Real differential-drive robot deployment
+
+---
+
+## 16. AI Tools Used
+
+AI tools were used as development assistants during this assignment.
+
+- **ChatGPT** — architecture discussion, ROS 2 concept clarification, controller analysis, debugging guidance, implementation review, and documentation review.
+- **Claude** — code-generation assistance for parts of the ROS 2 package.
+
+The generated code and design decisions were reviewed, executed, tested, tuned, and validated in ROS 2/Gazebo simulation before submission.
+
+> Remove any AI tool from this section that was not actually used during development.
+
+---
+
+## 17. Screenshots
+
+Create the following directory inside the repository:
+
+```text
+media/
+└── screenshots/
+    ├── waypoint_selection.png
+    ├── smooth_path.png
+    └── trajectory_tracking.png
+```
+
+### Waypoint Selection
+
+```markdown
+![RViz Waypoint Selection](media/screenshots/waypoint_selection.png)
+```
+
+### Generated Smooth Path
+
+```markdown
+![Generated Smooth Path](media/screenshots/smooth_path.png)
+```
+
+### Final Trajectory Tracking
+
+```markdown
+![Trajectory Tracking](media/screenshots/trajectory_tracking.png)
+```
+
+The final trajectory-tracking screenshot should clearly show the actual travelled path closely following the generated reference path.
+
+---
+
+## 18. Conclusion
+
+This project demonstrates an end-to-end ROS 2 trajectory-generation and tracking pipeline for a simulated differential-drive robot.
+
+The implemented system:
+
+1. Collects user-defined 2D waypoints from RViz.
+2. Generates a smooth path using parametric natural cubic splines.
+3. Converts the path into a constant-velocity time-parameterized trajectory.
+4. Tracks the trajectory using a custom time-indexed controller with a Pure-Pursuit-style curvature law.
+5. Publishes linear and angular velocity commands to the differential-drive robot.
+6. Visualizes both the reference path and actual travelled path in RViz.
+
+Simulation results demonstrate that, after controller tuning, the robot can closely follow the generated smooth trajectory. The modular ROS 2 architecture also provides a clear foundation for future extensions such as improved velocity profiles, obstacle handling, replanning, and real-robot deployment.
