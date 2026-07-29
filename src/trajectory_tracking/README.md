@@ -15,9 +15,9 @@ This package focuses on converting a set of user-selected 2D waypoints into a sm
 
 Example:
 
-```text
-https://youtu.be/YOUR_VIDEO_ID
-```
+
+https://drive.google.com/file/d/12gCSj7QyUE4WJfPQWpByvY0OIc_wvKUt/view?usp=drive_link
+
 
 ---
 
@@ -788,7 +788,7 @@ Add the following screenshots to demonstrate the system performance.
 
 ### 1. Waypoint Selection
 
-*(Insert screenshot showing the red waypoint markers selected in RViz.)*
+
 
 
 ![Waypoint Selection](media/Waypoint_Selection.png)
@@ -798,7 +798,7 @@ Add the following screenshots to demonstrate the system performance.
 
 ### 2. Smoothed Path
 
-*(Insert screenshot showing the blue cubic-spline path generated from the selected waypoints.)*
+
 
 
 ![Smoothed Path](media/smooth_path.png)
@@ -808,7 +808,6 @@ Add the following screenshots to demonstrate the system performance.
 
 ### 3. Final Trajectory Tracking
 
-*(Insert screenshot showing the green travelled path closely following the blue reference path.)*
 
 
 ![Trajectory Tracking Result](media/trajectory_tracking.png)
