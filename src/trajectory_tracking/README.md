@@ -4,14 +4,6 @@ A from-scratch ROS 2 Humble pipeline for **waypoint collection → cubic-spline 
 
 This project implements the path smoothing, trajectory generation, and trajectory tracking stages without relying on Nav2 planning or controller plugins.
 
-It assumes that a working simulated differential-drive robot already exists with:
-
-- URDF / Xacro
-- Gazebo simulation
-- `ros2_control` and a differential-drive controller
-- `/odom`
-- `/cmd_vel`
-- Working TF tree
 
 This package focuses on converting a set of user-selected 2D waypoints into a smooth trajectory and making the robot track it.
 
@@ -410,107 +402,417 @@ A working differential-drive robot simulation providing `/odom` and accepting `/
 
 ---
 
-## 8. Build and Run
+# 8. Build and Run
 
-Place the package inside the `src` directory of a ROS 2 workspace.
+## Prerequisites
+
+Before running this project, make sure the following software is installed:
+
+- Ubuntu 22.04
+- ROS 2 Humble
+- Gazebo
+- RViz2
+- Python 3
+- NumPy
+- SciPy
+- `ros_gz_bridge`
+- `ros2_control`
+- A differential-drive robot simulation that publishes `/odom` and accepts `/cmd_vel`
+
+---
+
+## Build the Package
+
+Clone or copy the package into the `src` directory of your ROS 2 workspace.
 
 ```bash
+cd ~/ros2_ws/src
+git clone <repository_url>
+
 cd ~/ros2_ws
-cp -r /path/to/trajectory_tracking src/
 
 colcon build --packages-select trajectory_tracking
+
 source install/setup.bash
 ```
 
-### Terminal 1 — Start the Robot Simulation
+---
 
-Start the existing differential-drive robot simulation:
+# Running the Project
+
+The project uses **two launch files**.
+
+The first launch file starts the complete simulation environment, while the second launch file starts the trajectory-tracking pipeline.
+
+---
+
+## Terminal 1 – Start the Simulation Environment
+
+Launch the simulation using:
 
 ```bash
-ros2 launch <your_robot_bringup_package> <your_sim_launch_file>
+ros2 launch <your_robot_package> display.launch.py
 ```
 
-The robot simulation must provide:
+This launch file starts:
+
+- Gazebo simulation
+- Differential-drive robot
+- RViz2
+- Gazebo ↔ ROS 2 Bridge
+- TF tree
+- `/odom`
+- `/cmd_vel`
+
+The purpose of this launch file is to prepare the robot simulation before running the trajectory tracking pipeline.
+
+After launching, verify that:
+
+- The robot is visible in Gazebo.
+- The robot model is displayed in RViz.
+- TF frames are available.
+- `/odom` is being published.
+
+You can verify this using:
+
+```bash
+ros2 topic list
+```
+
+Expected topics include:
 
 ```text
 /odom
 /cmd_vel
-TF
+/tf
+/tf_static
+/joint_states
 ```
 
-### Terminal 2 — Start RViz
+---
+
+## Terminal 2 – Start the Trajectory Tracking Pipeline
+
+Open a new terminal.
+
+Source the workspace:
 
 ```bash
-rviz2 -d install/trajectory_tracking/share/trajectory_tracking/config/trajectory_tracking.rviz
+source ~/ros2_ws/install/setup.bash
 ```
 
-### Terminal 3 — Start the Trajectory Pipeline
+Launch the trajectory tracking package:
 
 ```bash
 ros2 launch trajectory_tracking trajectory_tracking.launch.py
 ```
 
-### Select Waypoints
+This launch file starts the following ROS 2 nodes:
 
-In RViz:
+- `waypoint_collector_node`
+- `path_smoother_node`
+- `trajectory_generator_node`
+- `trajectory_controller_node`
+- `rviz_visualizer_node`
 
-1. Select **Publish Point**.
-2. Click seven points.
-3. After the seventh point, the pipeline starts automatically.
-4. The smooth path is generated.
-5. The trajectory is time-parameterized.
-6. The controller starts publishing velocity commands.
-7. The robot follows the generated trajectory.
+Each node performs one stage of the complete trajectory-tracking pipeline.
 
-No keyboard input, service call, or GUI trigger is required in the current implementation.
+---
 
-### Example Launch Parameters
+## Running the System
+
+Once both launch files are running:
+
+### Step 1
+
+Open RViz.
+
+Select the **Publish Point** tool.
+
+---
+
+### Step 2
+
+Click **7 points** on the ground to define the desired path.
+
+Each click publishes:
+
+```text
+/clicked_point
+```
+
+The Waypoint Collector stores these points.
+
+---
+
+### Step 3
+
+After the seventh waypoint is received:
+
+- The raw waypoints are published.
+- The Path Smoother generates a smooth cubic spline.
+- The Trajectory Generator assigns timestamps to each point.
+- The Trajectory Controller starts following the generated trajectory automatically.
+
+No additional keyboard input or service call is required.
+
+---
+
+## RViz Visualization
+
+During execution, RViz displays:
+
+### Red Markers
+
+Original user-selected waypoints.
+
+### Blue Path
+
+Smooth reference path generated using the cubic spline.
+
+### Green Path
+
+Actual path travelled by the robot using odometry.
+
+When the controller is properly tuned, the green path closely follows the blue reference path.
+
+---
+
+## Launch Workflow
+
+```text
+Terminal 1
+
+display.launch
+│
+├── Gazebo
+├── Robot Spawn
+├── Gazebo ↔ ROS2 Bridge
+├── RViz2
+├── TF
+├── /odom
+└── /cmd_vel
+
+        │
+        ▼
+
+Terminal 2
+
+trajectory_tracking.launch.py
+│
+├── waypoint_collector_node
+├── path_smoother_node
+├── trajectory_generator_node
+├── trajectory_controller_node
+└── rviz_visualizer_node
+
+        │
+        ▼
+
+Click 7 Waypoints in RViz
+
+        │
+        ▼
+
+Path Smoothing
+
+        │
+        ▼
+
+Trajectory Generation
+
+        │
+        ▼
+
+Trajectory Tracking
+
+        │
+        ▼
+
+Robot follows the generated trajectory
+```
+
+---
+
+## Configurable Parameters
+
+The main launch parameters can be modified as required.
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `num_waypoints` | Number of user-selected waypoints | 7 |
+| `sample_spacing` | Distance between sampled spline points | 0.05 m |
+| `cruise_velocity` | Constant trajectory velocity | 0.5 m/s |
+| `control_frequency` | Controller update frequency | 20 Hz |
+
+Example:
 
 ```bash
 ros2 launch trajectory_tracking trajectory_tracking.launch.py \
-  num_waypoints:=7 \
-  sample_spacing:=0.05 \
-  cruise_velocity:=0.5 \
-  control_frequency:=20.0
+    num_waypoints:=7 \
+    sample_spacing:=0.05 \
+    cruise_velocity:=0.5 \
+    control_frequency:=20.0
 ```
 
----
+# 9. Results
 
-## 9. Results
+The proposed trajectory tracking pipeline was successfully implemented and tested in a Gazebo simulation using a differential-drive robot.
 
-The complete pipeline was evaluated in simulation using a differential-drive robot.
+The system successfully performs the complete pipeline from user-defined waypoints to robot motion without relying on Nav2 planning or controller plugins.
 
-Seven waypoints were selected interactively in RViz. The waypoint collector passed these points to the cubic-spline path smoother, which generated a dense smooth reference path. The path was then converted into a constant-velocity, time-parameterized trajectory and tracked by the custom controller.
-
-During visualization:
+The workflow is shown below:
 
 ```text
-Red markers → Original selected waypoints
-Blue path   → Generated smooth reference path
-Green path  → Actual robot trajectory
-```
-
-After controller tuning, the actual travelled path closely followed the generated reference path, including curved sections.
-
-During initial experiments, conservative maximum linear and angular velocity limits produced noticeably larger tracking errors. Because the reference is time-indexed, insufficient velocity limits caused the robot to fall behind the moving reference and the controller commands to saturate.
-
-Increasing the velocity limits within the capabilities of the simulated differential-drive robot significantly improved tracking performance.
-
-### Trajectory Tracking Result
-
-Add the final RViz screenshot here:
-
-```markdown
-![Trajectory Tracking Result](media/screenshots/trajectory_tracking.png)
-```
-
-### Waypoint and Smoothed-Path Visualization
-
-```markdown
-![Waypoint and Smoothed Path](media/screenshots/smooth_path.png)
+User selects waypoints in RViz
+            │
+            ▼
+Waypoint Collection
+            │
+            ▼
+Path Smoothing (Natural Cubic Spline)
+            │
+            ▼
+Trajectory Generation
+            │
+            ▼
+Trajectory Tracking Controller
+            │
+            ▼
+Velocity Commands (/cmd_vel)
+            │
+            ▼
+Differential-Drive Robot
 ```
 
 ---
+
+## Waypoint Collection
+
+The user selects waypoints interactively using the **Publish Point** tool in RViz.
+
+After the configured number of waypoints (default: **7**) is collected, the system automatically starts the trajectory generation pipeline without requiring any additional user input.
+
+---
+
+## Path Smoothing Results
+
+The raw waypoints are converted into a smooth path using **Natural Parametric Cubic Spline Interpolation**.
+
+Compared to straight-line connections, the generated spline:
+
+- Produces a continuous and smooth path.
+- Eliminates sharp corners between waypoints.
+- Generates evenly spaced intermediate points.
+- Provides a path that is easier for the robot to follow.
+
+---
+
+## Trajectory Generation Results
+
+The smoothed path is converted into a time-parameterized trajectory using a constant cruise velocity.
+
+Each trajectory point contains:
+
+- Position (x, y)
+- Heading (θ)
+- Reference velocity
+- Time from trajectory start
+
+This allows the controller to determine the desired robot state at every instant during execution.
+
+---
+
+## Trajectory Tracking Results
+
+The custom trajectory controller successfully tracks the generated trajectory using odometry feedback.
+
+During execution, the controller continuously:
+
+- Reads the robot's current position from `/odom`.
+- Computes the desired reference point based on the elapsed time.
+- Calculates distance and heading errors.
+- Publishes linear and angular velocity commands on `/cmd_vel`.
+
+After tuning the controller parameters, the robot closely follows the generated trajectory throughout the simulation.
+
+---
+
+## RViz Visualization
+
+The execution can be monitored in RViz using three different visualizations:
+
+| Visualization | Description |
+|---------------|-------------|
+| 🔴 Red Markers | User-selected waypoints |
+| 🔵 Blue Path | Smoothed reference path generated by the cubic spline |
+| 🟢 Green Path | Actual path travelled by the robot using odometry |
+
+The close overlap between the **blue reference path** and the **green travelled path** demonstrates good trajectory tracking performance.
+
+---
+
+## Performance Observations
+
+During initial testing, the robot exhibited noticeable tracking errors because the maximum linear and angular velocity limits were set conservatively.
+
+Since the controller follows a **time-indexed trajectory**, low velocity limits prevented the robot from reaching the desired reference position on time.
+
+After increasing the maximum linear and angular velocity limits within the capabilities of the simulated robot:
+
+- Trajectory tracking accuracy improved significantly.
+- The robot followed curved paths more smoothly.
+- Oscillations were reduced.
+- The travelled path closely matched the reference trajectory.
+
+---
+
+## Summary
+
+The implemented ROS 2 pipeline successfully demonstrates:
+
+- ✔ Interactive waypoint collection using RViz
+- ✔ Smooth path generation using Natural Parametric Cubic Spline Interpolation
+- ✔ Constant-velocity trajectory generation
+- ✔ Time-indexed trajectory tracking
+- ✔ Successful differential-drive robot control in Gazebo
+- ✔ Real-time visualization of both reference and actual robot paths in RViz
+
+The modular architecture also allows each stage of the pipeline to be extended or replaced independently, making the project suitable for future enhancements such as dynamic obstacle avoidance, trajectory replanning, or deployment on a real mobile robot.
+
+---
+
+## Result Screenshots
+
+Add the following screenshots to demonstrate the system performance.
+
+### 1. Waypoint Selection
+
+*(Insert screenshot showing the red waypoint markers selected in RViz.)*
+
+```markdown
+![Waypoint Selection](media/Waypoint Selection.png)
+```
+
+---
+
+### 2. Smoothed Path
+
+*(Insert screenshot showing the blue cubic-spline path generated from the selected waypoints.)*
+
+```markdown
+![Smoothed Path](media/smooth_path.png)
+```
+
+---
+
+### 3. Final Trajectory Tracking
+
+*(Insert screenshot showing the green travelled path closely following the blue reference path.)*
+
+```markdown
+![Trajectory Tracking Result](media/trajectory_tracking.png)
+```
 
 ## 10. Testing and QA
 
@@ -717,28 +1019,27 @@ Create the following directory inside the repository:
 
 ```text
 media/
-└── screenshots/
     ├── waypoint_selection.png
     ├── smooth_path.png
     └── trajectory_tracking.png
 ```
 
-### Waypoint Selection
+### Test 1 Trajectory Tracking
 
 ```markdown
-![RViz Waypoint Selection](media/screenshots/waypoint_selection.png)
+![RViz Waypoint Selection](media/test1.png)
 ```
 
-### Generated Smooth Path
+### Test 2 Trajectory Tracking
 
 ```markdown
-![Generated Smooth Path](media/screenshots/smooth_path.png)
+![Generated Smooth Path](media/test2.png)
 ```
 
-### Final Trajectory Tracking
+### Test 3 Trajectory Tracking
 
 ```markdown
-![Trajectory Tracking](media/screenshots/trajectory_tracking.png)
+![Trajectory Tracking](media/test3.png)
 ```
 
 The final trajectory-tracking screenshot should clearly show the actual travelled path closely following the generated reference path.
