@@ -790,9 +790,9 @@ Add the following screenshots to demonstrate the system performance.
 
 *(Insert screenshot showing the red waypoint markers selected in RViz.)*
 
-```markdown
-![Waypoint Selection](media/Waypoint Selection.png)
-```
+
+![Waypoint Selection](media/Waypoint_Selection.png)
+
 
 ---
 
@@ -800,9 +800,9 @@ Add the following screenshots to demonstrate the system performance.
 
 *(Insert screenshot showing the blue cubic-spline path generated from the selected waypoints.)*
 
-```markdown
+
 ![Smoothed Path](media/smooth_path.png)
-```
+
 
 ---
 
@@ -810,9 +810,8 @@ Add the following screenshots to demonstrate the system performance.
 
 *(Insert screenshot showing the green travelled path closely following the blue reference path.)*
 
-```markdown
+
 ![Trajectory Tracking Result](media/trajectory_tracking.png)
-```
 
 ## 10. Testing and QA
 
@@ -1026,21 +1025,20 @@ media/
 
 ### Test 1 Trajectory Tracking
 
-```markdown
 ![RViz Waypoint Selection](media/test1.png)
-```
+
+
 
 ### Test 2 Trajectory Tracking
 
-```markdown
+
 ![Generated Smooth Path](media/test2.png)
-```
+
 
 ### Test 3 Trajectory Tracking
 
-```markdown
 ![Trajectory Tracking](media/test3.png)
-```
+
 
 The final trajectory-tracking screenshot should clearly show the actual travelled path closely following the generated reference path.
 
